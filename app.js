@@ -48,7 +48,7 @@ async function addFiles(fileList){
   for(const file of fileList){
     if(!/\.pdf$/i.test(file.name) && file.type!=='application/pdf'){ toast(`Skipped ${file.name} (not a PDF)`,'warn'); continue; }
     const id = 'pdf'+(++pdfSeq);
-    const rec = { id, name:file.name, size:file.size, numPages:0, doc:null, pages:[], status:'loading' };
+    const rec = { id, name:file.name, file, size:file.size, numPages:0, doc:null, pages:[], status:'loading' };
     state.pdfs.push(rec);
     renderLibrary();
     try{
@@ -370,8 +370,8 @@ function specChips(specs){
 
 function renderResults(){
   const box=$('#results'); box.innerHTML='';
-  const dlW=$('#dlResultsWord');
-  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; if(dlW)dlW.disabled=true; return; }
+  const dlW=$('#dlResultsWord'), dlP=$('#dlPages');
+  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; if(dlW)dlW.disabled=true; if(dlP)dlP.disabled=true; return; }
   let total=0;
   state.matchesByKw.forEach((g,i)=>{
     total+=g.findings.length;
@@ -408,7 +408,7 @@ function renderResults(){
     box.appendChild(grp);
   });
   $('#resCount').textContent=`${total} finding${total===1?'':'s'}`;
-  if(dlW)dlW.disabled = !total;
+  if(dlW)dlW.disabled = !total; if(dlP)dlP.disabled = !total;
 }
 function highlightQuote(quote, terms){
   let out=esc(quote);
@@ -690,6 +690,38 @@ function downloadResultsWord(){
   if(!state.matchesByKw.length){ toast('Run a scan first','warn'); return; }
   download(reportName('doc','keyword_results'),'application/msword','﻿'+wordDoc(buildEvidenceHtml()));
 }
+// Extract ONLY the source pages that matched into a new PDF — full original
+// detail (clauses, tables, standards), like the offline tool's matched-pages PDF.
+async function downloadMatchedPages(){
+  if(!window.PDFLib){ toast('PDF library not loaded','err'); return; }
+  const byPdf=new Map();   // fileId -> Set(pageNumbers)
+  state.matchesByKw.forEach(g=>g.findings.forEach(f=>f.sourceList.forEach(s=>{
+    if(!byPdf.has(s.fileId)) byPdf.set(s.fileId,new Set());
+    byPdf.get(s.fileId).add(s.page);
+  })));
+  if(!byPdf.size){ toast('No matched pages to extract','warn'); return; }
+  const btn=$('#dlPages'), orig=btn.textContent; btn.disabled=true; btn.textContent='Building PDF…';
+  try{
+    const { PDFDocument }=window.PDFLib;
+    const out=await PDFDocument.create();
+    let firstName='', usedFiles=0;
+    for(const rec of state.pdfs){          // source-file order
+      if(rec.status!=='ready' || !rec.file || !byPdf.has(rec.id)) continue;
+      const src=await PDFDocument.load(await rec.file.arrayBuffer(), { ignoreEncryption:true });
+      const total=src.getPageCount();
+      const idxs=[...byPdf.get(rec.id)].sort((a,b)=>a-b).map(p=>p-1).filter(i=>i>=0 && i<total);
+      if(!idxs.length) continue;
+      if(!firstName) firstName=rec.name; usedFiles++;
+      (await out.copyPages(src, idxs)).forEach(p=>out.addPage(p));
+    }
+    if(out.getPageCount()===0) throw new Error('no pages');
+    const bytes=await out.save();
+    const base = usedFiles===1 ? firstName.replace(/\.pdf$/i,'') : ($('#projectName').value||'documents');
+    download(base+' — matched pages.pdf','application/pdf', new Blob([bytes],{type:'application/pdf'}));
+    toast(`Matched pages PDF ready (${out.getPageCount()} pages)`,'ok');
+  }catch(e){ console.error(e); toast('Could not build matched-pages PDF','err'); }
+  finally{ btn.textContent=orig; btn.disabled = !state.matchesByKw.some(g=>g.findings.length); }
+}
 function exportPrint(){ window.print(); }
 function reportName(ext, base){ return ($('#projectName').value||'pdf-scan').replace(/[^\w-]+/g,'_')+'_'+(base||'findings')+'.'+ext; }
 
@@ -744,6 +776,7 @@ function init(){
   $('#btnScan').onclick=scan;
   $('#btnReport').onclick=openReport;
   $('#dlResultsWord').onclick=downloadResultsWord;
+  $('#dlPages').onclick=downloadMatchedPages;
   updateReportBtn();
 
   // viewer nav
