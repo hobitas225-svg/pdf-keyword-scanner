@@ -196,10 +196,15 @@ function searchWithRegexes(regexes, ready){
         const hitTerms=[]; let bestType='syn';
         for(const r of regexes){ r.re.lastIndex=0; if(r.re.test(quote)){ hitTerms.push(r.term); if(RANK[r.type]>RANK[bestType])bestType=r.type; } }
         if(!hitTerms.length) continue;
+        // richer context for AI extraction: this clause + following lines (standard/bullet lists
+        // often follow "…shall be provided to the following:"), stop at the next sub-clause heading
+        let ctx=lines[i], k=i+1;
+        while(k<lines.length && ctx.length<700){ const nx=lines[k]||''; if(/^\d+(?:\.\d+){2,}\s/.test(nx) && ctx.length>150) break; ctx+=' '+nx; k++; }
+        ctx=ctx.replace(/\s+/g,' ').trim().slice(0,800);
         const tags=[...new Set((quote.match(TAG_RE)||[]))].slice(0,6);
         const tabular=isTabular(lines[i]);
         let conf={exact:.95,alias:.8,syn:.65}[bestType]; if(tabular)conf=Math.min(.98,conf+.03);
-        out.push({ fileId:pdf.id, file:pdf.name, page:page.n, quote:quote.trim(),
+        out.push({ fileId:pdf.id, file:pdf.name, page:page.n, quote:quote.trim(), context:ctx,
           terms:[...new Set(hitTerms)], type:bestType, tabular, tags, conf });
       }
     }
@@ -232,19 +237,40 @@ function extractSpecs(t){
   return { qty, amps, kA, voltage, ip, form, phase };
 }
 
+// Detect standards / codes verbatim (BS EN 61439-1:2021, IEC 60947-6-1, ISO 9001,
+// CIBSE TM39:2009, MID, …). Deterministic — only what's actually written.
+function extractStandards(t){
+  t=t||''; const out=new Set();
+  const add=s=>{ s=s.replace(/\s+/g,' ').trim().replace(/[.,;:]$/,''); if(s.length>=4) out.add(s); };
+  // BS / EN / IEC / ISO / IEEE / NFPA designations, incl. BS EN IEC and BS ISO, with part + year (+ amendment)
+  const re=/\b(?:BS\s?EN\s?IEC|BS\s?EN|BS\s?ISO|BS|EN|IEC|ISO|IEEE|NFPA)\s?\d{2,5}(?:[-‑]\d+){0,3}(?::\d{4})?(?:\s*\((?:Amendment|Amd|Am)[^)]*\))?(?:\s*Category\s*\d+[A-Za-z]?)?/gi;
+  let m; while((m=re.exec(t))!==null){ add(m[0]); }
+  // CIBSE codes (TM39:2009, LG7 (2023), SLL Code for Lighting (2022))
+  const re2=/\bCIBSE(?:\s+(?:TM|LG|SLL|AM)[\s\w]*?\d{2,4}|\s+(?:SLL\s+)?Code[\s\w]*?\(\d{4}\))/gi;
+  while((m=re2.exec(t))!==null){ add(m[0]); }
+  // BS 7671 18th Edition phrasing
+  const re3=/\bBS\s?7671:?\s?\d{4}(?:\s*\d{1,2}(?:st|nd|rd|th)\s*Edition)?(?:\s*\((?:Amendment|Amd)[^)]*\))?/gi;
+  while((m=re3.exec(t))!==null){ add(m[0]); }
+  // utilisation category (AC33A etc.), insulation class, MID
+  (t.match(/\b(?:AC|DC)\d{2}[A-Z]?\b/g)||[]).forEach(add);
+  if(/\bMID\b/.test(t)||/Measuring Instruments Directive/i.test(t)) add('MID (Measuring Instruments Directive)');
+  return [...out].slice(0,14);
+}
+
 // Group raw matches into DISTINCT findings: dedupe identical text, merge
 // near-duplicates (one contained in another), and combine their source refs.
 function buildFindings(matches){
   const byKey=new Map();
   for(const m of matches){
     const clean=cleanQuote(m.quote); const key=normKey(clean); if(!key) continue;
-    if(!byKey.has(key)) byKey.set(key,{ text:clean, key, terms:new Set(), type:m.type, tabular:m.tabular,
+    if(!byKey.has(key)) byKey.set(key,{ text:clean, key, context:m.context||clean, terms:new Set(), type:m.type, tabular:m.tabular,
       toc:isTocLine(m.quote), tags:new Set(), conf:m.conf, sources:new Map() });
     const f=byKey.get(key);
     m.terms.forEach(t=>f.terms.add(t)); m.tags.forEach(t=>f.tags.add(t));
     if(RANK[m.type]>RANK[f.type]) f.type=m.type;
     if(m.tabular) f.tabular=true; f.conf=Math.max(f.conf,m.conf);
     if(clean.length>f.text.length) f.text=clean;
+    if((m.context||'').length>(f.context||'').length) f.context=m.context;
     const sk=m.fileId+'|'+m.page; if(!f.sources.has(sk)) f.sources.set(sk,{fileId:m.fileId,file:m.file,page:m.page});
   }
   // merge a finding whose normalised text is contained in a longer one
@@ -254,13 +280,15 @@ function buildFindings(matches){
     const host=kept.find(k=>k.key.includes(f.key) && f.key.length>=10);
     if(host){ f.terms.forEach(t=>host.terms.add(t)); f.tags.forEach(t=>host.tags.add(t));
       for(const [sk,v] of f.sources) host.sources.set(sk,v);
+      if((f.context||'').length>(host.context||'').length) host.context=f.context;
       if(RANK[f.type]>RANK[host.type]) host.type=f.type; if(f.tabular)host.tabular=true; continue; }
     kept.push(f);
   }
   // drop contents-page (TOC) entries if real content findings exist
   const hasContent=kept.some(f=>!f.toc);
   let out=hasContent?kept.filter(f=>!f.toc):kept;
-  out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6); f.specs=extractSpecs(f.text);
+  out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6);
+    f.specs=extractSpecs(f.text); f.standards=extractStandards(f.context||f.text);
     f.sourceList=[...f.sources.values()].sort((a,b)=>a.file.localeCompare(b.file)||a.page-b.page); delete f.sources; delete f.key; });
   // chronological: order findings by the earliest page they appear on (TOC entries last)
   const pg=f=> f.sourceList.length ? Math.min(...f.sourceList.map(s=>s.page)) : Infinity;
@@ -367,6 +395,11 @@ function specChips(specs){
   const parts=order.filter(([k])=>specs[k]).map(([k,lbl])=>`<span class="spec-chip"><b>${lbl}</b> ${esc(specs[k])}</span>`);
   return parts.length?`<div class="spec-row">${parts.join('')}</div>`:'';
 }
+// chips for detected standards/codes (verbatim)
+function stdChips(stds){
+  if(!stds||!stds.length) return '';
+  return `<div class="spec-row">${stds.map(s=>`<span class="std-chip">${esc(s)}</span>`).join('')}</div>`;
+}
 
 function renderResults(){
   const box=$('#results'); box.innerHTML='';
@@ -396,7 +429,7 @@ function renderResults(){
                     : '<span class="m-badge syn">synonym</span>';
         const tbadge = f.tabular?'<span class="m-badge table">table/row</span>':'';
         item.innerHTML=`<div class="m-quote">${highlightQuote(f.text,f.terms)}</div>
-          ${specChips(f.specs)}
+          ${specChips(f.specs)}${stdChips(f.standards)}
           <div class="m-top">${badge}${tbadge}<span class="m-cite">${srcLinks(i,j,f)}</span></div>
           ${f.tags.length?`<div class="m-tags">${f.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}`;
         body.appendChild(item);
@@ -504,18 +537,24 @@ function refreshKeyStatus(){ const el=$('#keyStatus'); if(!el) return; const k=g
   el.textContent = k ? `saved ✓ (ends …${k.slice(-4)})` : 'no key saved yet';
   el.style.color = k ? '#7CFFB2' : '#aebfdc'; }
 
-const AI_SYSTEM=`You summarise extracted text from construction / electrical project PDFs, one keyword at a time, for a professional engineering reader.
-For each keyword you are given a NUMBERED list of evidence snippets — each is a verbatim quote already tied to a file and page.
-Write a concise, organised, bullet-point summary of what the documents say about that keyword.
-STRICT RULES (this is for compliance submissions — accuracy is critical):
-- Use ONLY information contained in the provided snippets. Do not add, infer, generalise, or assume anything.
-- NEVER state a technical value (voltage, current/breaker rating, cable size, fault level, IP rating, quantity, manufacturer, standard, time, location, generator/ATS rating) unless it appears verbatim in a snippet.
-- Merge duplicate or near-duplicate snippets into a single bullet.
-- Every bullet MUST cite the snippet index/indices it is based on, in its "cites" array. Do not write a bullet with no citation.
-- Keep bullets factual and short. If the evidence is thin, say only what is stated.
-- BE CONCISE: at most 8 bullets per keyword, one short sentence each. Merge related/near-duplicate snippets aggressively into a single bullet rather than listing many similar ones. This keeps the response well within length limits.
-- NO REPETITION ACROSS KEYWORDS: many of these keywords overlap (e.g. "Low Voltage Distribution", "LV Distribution System", "LV Equipment" all describe the same systems). State each fact ONCE, under the single most appropriate keyword, and do NOT restate it (or a paraphrase of it) under any other keyword. A keyword may legitimately end up with few or zero unique bullets — return an empty bullets array for it rather than padding it with facts already given under another keyword.
-Return one group per keyword, in the same order given, using the exact keyword string.`;
+const AI_SYSTEM=`You are a chartered electrical engineer extracting requirements from project specifications for an expert audience (engineers with 20+ years' experience). For each keyword you receive NUMBERED evidence excerpts taken verbatim from the documents, each tied to a file and page.
+
+Produce a precise, de-duplicated requirements summary for each keyword. The output is pasted into Excel, stored in a database, and discussed with clients across different countries and industries — it must be specific, professional, and free of filler.
+
+EXTRACT, whenever present in the evidence:
+- Standards / codes with their FULL designation: number, part, year and amendment — verbatim. e.g. "BS EN 61439-1:2021", "BS EN IEC 61439-2:2021", "BS 7671:2018 18th Edition (Amendment 3:2024)", "IEC 60947-6-1", "ISO 9001", "BS ISO 8528", "CIBSE TM39:2009", "BS 5266-1:2016", "BS 8519:2020 Category 3". Never abbreviate or drop the part/year/amendment. State which requirement maps to which standard.
+- Ratings & parameters: voltage, current (A), fault level (kA), IP rating, form of separation, phase, utilisation category (e.g. "AC33A"), insulation class (e.g. "Class 0, 1kV"), spare capacity (%), comms/protocol (e.g. "Modbus/RS485", "TCP/IP").
+- Concrete requirements: what shall be provided / installed / tested / labelled / configured, with quantities and to which standard.
+
+RULES — follow exactly:
+- Output ONLY facts contained in the evidence. NEVER invent or generalise a standard, rating, requirement or value. If it is not in the evidence, it does not appear.
+- NO FILLER / NO AI SLOP. Forbidden: introductions, restating the keyword, "the document describes/outlines/specifies…", "it appears", "as part of the scope", "is mentioned", and any sentence carrying no concrete standard/rating/requirement. If a bullet would not carry a specific fact, delete it.
+- ONE requirement per bullet, written as a terse technical line an engineer would accept straight into a schedule. Quote standards, categories and values exactly as written.
+- NO REPETITION: state each requirement once, under the single most relevant keyword. Do not repeat it (or a paraphrase) under another keyword. A keyword may legitimately have few or zero unique bullets — return an empty bullets array rather than padding.
+- Cite the evidence index/indices ([n]) each bullet draws from.
+- The reader is an expert: do not explain basics or what a standard is.
+
+Return one group per keyword, in the order given, using the exact keyword string.`;
 
 const AI_SCHEMA={ type:'object', additionalProperties:false, required:['groups'], properties:{
   groups:{ type:'array', items:{ type:'object', additionalProperties:false, required:['keyword','bullets'], properties:{
@@ -538,7 +577,7 @@ async function generateAiSummary(){
       seen.add(k); picked.push([idx,f]);
     }
     if(!picked.length) return `### Keyword: ${g.kw}\n  (no unique snippets — every match is already listed under an earlier keyword; return an empty bullets array for this keyword)`;
-    const ev=picked.map(([idx,f])=>`  [${idx}] "${f.text}" (${f.sourceList.map(s=>s.file+' p.'+s.page).join('; ')})`).join('\n');
+    const ev=picked.map(([idx,f])=>`  [${idx}] "${f.context||f.text}" (${f.sourceList.map(s=>s.file+' p.'+s.page).join('; ')})`).join('\n');
     const omitted=g.findings.length-picked.length;
     const more=omitted>0?`\n  (note: ${omitted} further snippets omitted as duplicates or lower-ranked)`:'';
     return `### Keyword: ${g.kw}\n${ev}${more}`;
@@ -611,7 +650,7 @@ function buildEvidenceHtml(){
     if(g.isChain) h+=chainNoteHtml(g);
     if(!g.findings.length){ h+=`<p class="rep-none">No project-specific information found in uploaded documents.</p></div>`; return; }
     h+=`<ul class="rep-bul">`;
-    g.findings.forEach((f,j)=>{ h+=`<li>${esc(f.text)} <span class="rep-cite">(${srcLinks(i,j,f)})</span>${f.tabular?' <span class="m-badge table">table/row</span>':''}${specChips(f.specs)}</li>`; });
+    g.findings.forEach((f,j)=>{ h+=`<li>${esc(f.text)} <span class="rep-cite">(${srcLinks(i,j,f)})</span>${f.tabular?' <span class="m-badge table">table/row</span>':''}${specChips(f.specs)}${stdChips(f.standards)}</li>`; });
     h+=`</ul>`;
     const blob=g.findings.map(f=>f.text).join('  ');
     const absent=VALUE_CHECKS.filter(([,re])=>!re.test(blob)).map(([n])=>n);
@@ -681,6 +720,7 @@ function wordDoc(inner){
     ul.rep-bul{margin:4pt 0} ul.rep-bul li{margin-bottom:5pt}
     .rep-cite{color:#5C6B82;font-size:9pt} a.src{color:#1E90FF;text-decoration:none} .src-file{color:#5C6B82}
     .spec-row{margin:3pt 0} .spec-chip{font-size:8.5pt;background:#eef4ff;border:1pt solid #cfe0fb;color:#1976D2;border-radius:3pt;padding:1pt 4pt;margin-right:3pt} .spec-chip b{color:#0A1F44}
+    .std-chip{font-size:8.5pt;background:#eef7ee;border:1pt solid #cfe6cf;color:#1f7a3d;border-radius:3pt;padding:1pt 4pt;margin-right:3pt;font-family:Consolas,monospace}
     .rep-warn{background:#fff7e6;border:1pt solid #f0dcab;padding:6pt;color:#8a6418}
     .rep-none{color:#b9851f;font-style:italic} .rep-sum{background:#f3f6fb;padding:6pt} code{font-family:Consolas}
     </style></head><body>${inner}</body></html>`;
