@@ -184,8 +184,14 @@ a.src:hover{background:#eaf3ff}
 .toast.ok{background:var(--ok)} .toast.warn{background:var(--warn)} .toast.err{background:var(--err)}
 
 @media print{
-  body *{visibility:hidden}
-  #reportBody, #reportBody *{visibility:visible}
-  #reportBody{position:absolute; left:0; top:0; width:100%; padding:0}
-  .modal{position:static; background:none; padding:0}
+  /* remove the whole app from the print flow (display:none frees the space —
+     visibility:hidden kept it, which is what produced the blank pages in Chrome) */
+  body > *{display:none !important}
+  #reportModal{display:block !important; position:static !important; inset:auto !important; background:none !important; padding:0 !important}
+  #reportModal .modal-head{display:none !important}           /* drop the tabs + export buttons */
+  .modal-card{display:block !important; box-shadow:none !important; max-height:none !important; width:auto !important; border-radius:0 !important}
+  #reportBody{max-height:none !important; overflow:visible !important; padding:0 !important;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact}
+  .rep-kw{break-inside:avoid}            /* don't split a keyword section across a page break where avoidable */
+  @page{ margin:14mm }
 }
