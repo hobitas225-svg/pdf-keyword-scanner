@@ -342,7 +342,8 @@ function wireJumps(container){
 
 function renderResults(){
   const box=$('#results'); box.innerHTML='';
-  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; return; }
+  const dlW=$('#dlResultsWord'), dlC=$('#dlResultsCsv');
+  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; if(dlW)dlW.disabled=true; if(dlC)dlC.disabled=true; return; }
   let total=0;
   state.matchesByKw.forEach((g,i)=>{
     total+=g.findings.length;
@@ -378,6 +379,7 @@ function renderResults(){
     box.appendChild(grp);
   });
   $('#resCount').textContent=`${total} finding${total===1?'':'s'}`;
+  if(dlW)dlW.disabled = !total; if(dlC)dlC.disabled = !total;
 }
 function highlightQuote(quote, terms){
   let out=esc(quote);
@@ -639,19 +641,24 @@ function download(name, mime, content){
   const a=el('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 }
-function exportWord(){
-  const body=$('#reportBody').innerHTML;
-  const html=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+function wordDoc(inner){
+  return `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
     <head><meta charset='utf-8'><style>
     body{font-family:Calibri,Arial,sans-serif;color:#13243f}
     h1{font-size:18pt;color:#0A1F44} h2{font-size:13pt;color:#0A1F44;text-decoration:underline}
-    .rep-label{font-weight:bold;color:#0A1F44;margin-top:8pt} .rep-ev{list-style:none;padding:0}
-    .rep-ev li{margin-bottom:5pt;padding-left:8pt;border-left:2pt solid #1E90FF}
-    .ev-ref{color:#1E90FF;font-weight:bold;font-size:9pt;display:block} mark{background:#ffe680}
+    .rep-meta{color:#5C6B82;font-size:9.5pt;margin-bottom:10pt}
+    .chain-note{color:#1976D2;font-size:9.5pt;margin:4pt 0}
+    .rep-label{font-weight:bold;color:#0A1F44;margin-top:8pt}
+    ul.rep-bul{margin:4pt 0} ul.rep-bul li{margin-bottom:5pt}
+    .rep-cite{color:#5C6B82;font-size:9pt} a.src{color:#1E90FF;text-decoration:none} .src-file{color:#5C6B82}
     .rep-warn{background:#fff7e6;border:1pt solid #f0dcab;padding:6pt;color:#8a6418}
     .rep-none{color:#b9851f;font-style:italic} .rep-sum{background:#f3f6fb;padding:6pt} code{font-family:Consolas}
-    </style></head><body>${body}</body></html>`;
-  download(reportName('doc'),'application/msword','﻿'+html);
+    </style></head><body>${inner}</body></html>`;
+}
+function exportWord(){ download(reportName('doc','report'),'application/msword','﻿'+wordDoc($('#reportBody').innerHTML)); }
+function downloadResultsWord(){
+  if(!state.matchesByKw.length){ toast('Run a scan first','warn'); return; }
+  download(reportName('doc','keyword_results'),'application/msword','﻿'+wordDoc(buildEvidenceHtml()));
 }
 function exportPrint(){ window.print(); }
 function exportCsv(){
@@ -667,7 +674,7 @@ function exportCsv(){
   const csv=rows.map(r=>r.map(c=>{ c=String(c); return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c; }).join(',')).join('\r\n');
   download(reportName('csv'),'text/csv','﻿'+csv);
 }
-function reportName(ext){ return ($('#projectName').value||'pdf-scan').replace(/[^\w-]+/g,'_')+'_findings.'+ext; }
+function reportName(ext, base){ return ($('#projectName').value||'pdf-scan').replace(/[^\w-]+/g,'_')+'_'+(base||'findings')+'.'+ext; }
 
 // ================= keyword groups (localStorage) =================
 const LS='pdfscan.groups.v1';
@@ -719,6 +726,8 @@ function init(){
   // actions
   $('#btnScan').onclick=scan;
   $('#btnReport').onclick=openReport;
+  $('#dlResultsWord').onclick=downloadResultsWord;
+  $('#dlResultsCsv').onclick=exportCsv;
   updateReportBtn();
 
   // viewer nav

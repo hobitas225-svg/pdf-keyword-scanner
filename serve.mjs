@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 8131;
+const HOST = process.env.HOST || '0.0.0.0';  // listen on all interfaces so the LAN can reach it (firewall is the real gate)
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -40,6 +41,9 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\n  PDF Keyword Scanner running:  http://localhost:${PORT}\n`);
+server.listen(PORT, HOST, () => {
+  console.log(`\n  PDF Keyword Scanner running:`);
+  console.log(`    on this PC:     http://localhost:${PORT}`);
+  if (HOST === '0.0.0.0') console.log(`    other devices:  http://<this-PC-IP>:${PORT}   (run "Host on LAN (admin).cmd" once to allow it through the firewall)`);
+  console.log('');
 });
