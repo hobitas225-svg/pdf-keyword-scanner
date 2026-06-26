@@ -563,7 +563,7 @@ const AI_SCHEMA={ type:'object', additionalProperties:false, required:['groups']
       text:{type:'string'}, cites:{ type:'array', items:{type:'integer'} } } } } } } } } };
 
 const AI_MAX_EVIDENCE=40;   // cap snippets sent per keyword (big specs produce hundreds)
-const AI_TIMEOUT_MS=120000;
+const AI_TIMEOUT_MS=300000;   // big specs produce a long, detailed response — allow up to 5 min
 async function generateAiSummary(){
   const key=getKey(); if(!key){ toast('Add your Anthropic API key first','warn'); return; }
   const groups=state.matchesByKw.filter(g=>g.findings.length);
@@ -669,7 +669,7 @@ function buildSummaryHtml(){
       <button id="aiKeySave" class="btn sm primary">Save key</button></div>
       <span class="muted">Get one at console.anthropic.com → API keys. It is sent only to Anthropic, never stored anywhere but this browser. Prefer no AI? Use the <b>Evidence</b> tab — it needs no key.</span></div>`;
   }
-  if(aiState==='loading') h+=`<div class="ai-bar">⏳ Generating summary… <span class="muted">contacting Claude — large documents can take 30–60s; this panel will fill in when it returns.</span></div>`;
+  if(aiState==='loading') h+=`<div class="ai-bar">⏳ Generating summary… <span class="muted">contacting Claude — a large/detailed spec can take 1–2 minutes; this panel fills in when it returns.</span></div>`;
   else if(aiState==='done') h+=`<div class="ai-bar"><button id="aiGenBtn" class="btn sm">↻ Regenerate</button>
       <button id="aiKeyClear" class="btn sm ghost">change key</button>
       <span class="muted">Written by Claude from the extracted evidence only — click any page link to verify.</span></div>`;
