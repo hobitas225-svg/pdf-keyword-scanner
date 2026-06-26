@@ -239,22 +239,34 @@ function extractSpecs(t){
 
 // Detect standards / codes verbatim (BS EN 61439-1:2021, IEC 60947-6-1, ISO 9001,
 // CIBSE TM39:2009, MID, …). Deterministic — only what's actually written.
-function extractStandards(t){
-  t=t||''; const out=new Set();
-  const add=s=>{ s=s.replace(/\s+/g,' ').trim().replace(/[.,;:]$/,''); if(s.length>=4) out.add(s); };
-  // BS / EN / IEC / ISO / IEEE / NFPA designations, incl. BS EN IEC and BS ISO, with part + year (+ amendment)
-  const re=/\b(?:BS\s?EN\s?IEC|BS\s?EN|BS\s?ISO|BS|EN|IEC|ISO|IEEE|NFPA)\s?\d{2,5}(?:[-‑]\d+){0,3}(?::\d{4})?(?:\s*\((?:Amendment|Amd|Am)[^)]*\))?(?:\s*Category\s*\d+[A-Za-z]?)?/gi;
+function extractStandards(t, cap){
+  t=t||''; cap=cap||14; const out=new Set();
+  const add=s=>{
+    s=s.replace(/\s+/g,' ').trim().replace(/[.,;:]+$/,'');
+    // normalise spacing only (don't change the designation) so "BS7671"/"BSEN60309" dedupe cleanly
+    s=s.replace(/^BSEN\s?IEC/i,'BS EN IEC').replace(/^BSEN\s?ISO/i,'BS EN ISO').replace(/^BSEN/i,'BS EN');
+    s=s.replace(/^(BS EN IEC|BS EN ISO|BS EN|BS ISO|BS|EN|IEC|ISO)\s?(\d)/i,(m,p,d)=>p+' '+d);
+    if(s.length>=4) out.add(s);
+  };
+  // BS / BS EN / BS EN IEC / BS EN ISO / BS ISO / EN / EN ISO / IEC / ISO / IEEE / NFPA, with part + year (+ amendment)
+  const re=/\b(?:BS\s?EN\s?IEC|BS\s?EN\s?ISO|BS\s?EN|BS\s?ISO|BS|EN\s?ISO|EN|IEC|ISO|IEEE|NFPA)\s?\d{2,5}(?:[-‑]\d+){0,3}(?::\d{4})?(?:\s*\((?:Amendment|Amd|Am)[^)]*\))?(?:\s*Category\s*\d+[A-Za-z]?)?/gi;
   let m; while((m=re.exec(t))!==null){ add(m[0]); }
-  // CIBSE codes (TM39:2009, LG7 (2023), SLL Code for Lighting (2022))
-  const re2=/\bCIBSE(?:\s+(?:TM|LG|SLL|AM)[\s\w]*?\d{2,4}|\s+(?:SLL\s+)?Code[\s\w]*?\(\d{4}\))/gi;
+  // CIBSE codes (TM39:2009, LG7 (2023), SLL Code for Lighting (2022), Guide …)
+  const re2=/\bCIBSE(?:\s+(?:TM|LG|SLL|AM|Guide)[\s\w]*?\d{2,4}|\s+(?:SLL\s+)?Code[\s\w]*?\(\d{4}\))/gi;
   while((m=re2.exec(t))!==null){ add(m[0]); }
-  // BS 7671 18th Edition phrasing
+  // BS 7671 with edition / amendment
   const re3=/\bBS\s?7671:?\s?\d{4}(?:\s*\d{1,2}(?:st|nd|rd|th)\s*Edition)?(?:\s*\((?:Amendment|Amd)[^)]*\))?/gi;
   while((m=re3.exec(t))!==null){ add(m[0]); }
-  // utilisation category (AC33A etc.), insulation class, MID
+  // ENA Engineering Recommendations (ENA EREC G5/5, G99, G100, G5/5)
+  const re4=/\b(?:ENA\s+EREC\s+G\d{1,3}(?:\/\d{1,3})?|G\d{2,3}|G\d\/\d)\b/gi;
+  while((m=re4.exec(t))!==null){ add(m[0]); }
+  // Building Regulations Approved Documents (Part L2A, Part M, …)
+  const re5=/\bBuilding Regulations?(?:\s+Approved Document)?\s+Part\s+[A-Z]\d?[A-Z]?\b/gi;
+  while((m=re5.exec(t))!==null){ add(m[0]); }
+  // utilisation category (AC33A etc.) and MID
   (t.match(/\b(?:AC|DC)\d{2}[A-Z]?\b/g)||[]).forEach(add);
   if(/\bMID\b/.test(t)||/Measuring Instruments Directive/i.test(t)) add('MID (Measuring Instruments Directive)');
-  return [...out].slice(0,14);
+  return [...out].slice(0,cap);
 }
 
 // Group raw matches into DISTINCT findings: dedupe identical text, merge
@@ -325,6 +337,8 @@ function scan(){
   // chronological: keyword groups in the order they first appear in the document (none-found last)
   const firstPage=g=>{ let m=Infinity; g.findings.forEach(f=>f.sourceList.forEach(s=>{ if(s.page<m)m=s.page; })); return m; };
   state.matchesByKw.sort((a,b)=>firstPage(a)-firstPage(b));
+  // document-wide standards register: scan EVERY page of EVERY pdf (not just matched lines)
+  state.docStandards = buildStandardsRegister();
 
   aiState='idle'; aiError='';
   renderResults();
@@ -394,6 +408,38 @@ function specChips(specs){
   const order=[['qty','Qty'],['amps','A'],['kA','kA'],['voltage','V'],['ip','IP'],['form','Form'],['phase','Phase']];
   const parts=order.filter(([k])=>specs[k]).map(([k,lbl])=>`<span class="spec-chip"><b>${lbl}</b> ${esc(specs[k])}</span>`);
   return parts.length?`<div class="spec-row">${parts.join('')}</div>`:'';
+}
+// Scan every page of every ready PDF for standards (comprehensive, keyword-independent).
+function buildStandardsRegister(){
+  const map=new Map();   // std -> Map(fileName -> Set(page))
+  for(const pdf of state.pdfs){
+    if(pdf.status!=='ready') continue;
+    for(const page of pdf.pages){
+      // scan per LINE (not whole-page text) so a line-break can't merge "BS EN" with a
+      // number on the next line into a bogus standard
+      for(const line of page.lines){
+        for(const std of extractStandards(line, Infinity)){
+          if(!map.has(std)) map.set(std, new Map());
+          const fm=map.get(std);
+          if(!fm.has(pdf.name)) fm.set(pdf.name, new Set());
+          fm.get(pdf.name).add(page.n);
+        }
+      }
+    }
+  }
+  return [...map.entries()]
+    .map(([std,fm])=>({ std, refs:[...fm.entries()].map(([file,pages])=>({file, pages:[...pages].sort((a,b)=>a-b)})) }))
+    .sort((a,b)=>a.std.localeCompare(b.std, undefined, {numeric:true}));
+}
+function standardsRegisterHtml(){
+  const reg=state.docStandards||[];
+  if(!reg.length) return '';
+  let h=`<div class="rep-kw"><h2>Standards register</h2>
+    <div class="chain-note">${reg.length} standard${reg.length===1?'':'s'} referenced across the uploaded documents — every page scanned.</div>
+    <ul class="rep-bul rep-std-reg">`;
+  reg.forEach(r=>{ const refs=r.refs.map(x=>`${esc(x.file)} p.${x.pages.join(', p.')}`).join('; ');
+    h+=`<li><span class="std-chip">${esc(r.std)}</span> <span class="rep-cite">${refs}</span></li>`; });
+  return h+`</ul></div>`;
 }
 // chips for detected standards/codes (verbatim)
 function stdChips(stds){
@@ -550,7 +596,7 @@ RULES — follow exactly:
 - Output ONLY facts contained in the evidence. NEVER invent or generalise a standard, rating, requirement or value. If it is not in the evidence, it does not appear.
 - NO FILLER / NO AI SLOP. Forbidden: introductions, restating the keyword, "the document describes/outlines/specifies…", "it appears", "as part of the scope", "is mentioned", and any sentence carrying no concrete standard/rating/requirement. If a bullet would not carry a specific fact, delete it.
 - ONE requirement per bullet, written as a terse technical line an engineer would accept straight into a schedule. Quote standards, categories and values exactly as written.
-- NO REPETITION: state each requirement once, under the single most relevant keyword. Do not repeat it (or a paraphrase) under another keyword. A keyword may legitimately have few or zero unique bullets — return an empty bullets array rather than padding.
+- ZERO OVERLAP (mandatory): each distinct requirement/fact appears under EXACTLY ONE keyword — the single most specific one. Never state a fact, or any rephrasing of it, under a second keyword, even when it is genuinely relevant to several. Example: a firefighting-shaft ATS in a 2-hour fire enclosure to BS 9999 goes under "Automatic Transfer Switch" ONLY — not also under "Life Safety" or "Switchboard". Before writing each bullet, confirm you have not already stated that fact (or its substance) under another keyword; if you have, omit it here. It is correct for some keywords to have few or zero bullets.
 - Cite the evidence index/indices ([n]) each bullet draws from.
 - The reader is an expert: do not explain basics or what a standard is.
 
@@ -645,6 +691,7 @@ function aiCites(i, cites){
 // ---- Evidence mode: deduped verbatim findings (no highlighting) ----
 function buildEvidenceHtml(){
   let h=headerHtml('Evidence');
+  h+=standardsRegisterHtml();
   state.matchesByKw.forEach((g,i)=>{
     h+=`<div class="rep-kw"><h2>${esc(g.kw)}</h2>`;
     if(g.isChain) h+=chainNoteHtml(g);
@@ -667,7 +714,8 @@ function buildSummaryHtml(){
     return h+`<div class="ai-bar"><b>AI summary needs your Anthropic API key</b> (stored only in this browser).
       <div class="key-row"><input id="aiKeyInput" type="password" placeholder="sk-ant-..." spellcheck="false">
       <button id="aiKeySave" class="btn sm primary">Save key</button></div>
-      <span class="muted">Get one at console.anthropic.com → API keys. It is sent only to Anthropic, never stored anywhere but this browser. Prefer no AI? Use the <b>Evidence</b> tab — it needs no key.</span></div>`;
+      <span class="muted">Get one at console.anthropic.com → API keys. It is sent only to Anthropic, never stored anywhere but this browser. Prefer no AI? Use the <b>Evidence</b> tab — it needs no key.</span></div>`
+      + standardsRegisterHtml();   // register is deterministic — show it even without a key
   }
   if(aiState==='loading') h+=`<div class="ai-bar">⏳ Generating summary… <span class="muted">contacting Claude — a large/detailed spec can take 1–2 minutes; this panel fills in when it returns.</span></div>`;
   else if(aiState==='done') h+=`<div class="ai-bar"><button id="aiGenBtn" class="btn sm">↻ Regenerate</button>
@@ -677,6 +725,7 @@ function buildSummaryHtml(){
       <button id="aiKeyClear" class="btn sm ghost">change key</button>
       ${aiState==='error'?`<div class="ai-err">${esc(aiError)}</div>`:''}</div>`;
 
+  h+=standardsRegisterHtml();
   state.matchesByKw.forEach((g,i)=>{
     h+=`<div class="rep-kw"><h2>${esc(g.kw)}</h2>`;
     if(g.isChain) h+=chainNoteHtml(g);
