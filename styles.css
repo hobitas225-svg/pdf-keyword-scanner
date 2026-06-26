@@ -129,6 +129,9 @@ textarea:focus,input:focus,select:focus{outline:none; border-color:var(--blue)}
 .m-badge.table{background:#efe7fd; color:#6b3fb8}
 .m-quote{color:var(--text); line-height:1.45}
 .m-quote mark{background:var(--hl); padding:0 1px; border-radius:2px}
+.spec-row{display:flex; flex-wrap:wrap; gap:4px; margin:5px 0 2px}
+.spec-chip{font-size:10.5px; background:#eef4ff; border:1px solid #cfe0fb; color:var(--blue); border-radius:5px; padding:1px 7px; white-space:nowrap}
+.spec-chip b{color:var(--navy); font-weight:700; margin-right:3px}
 .m-tags{margin-top:4px}
 .tag{display:inline-block; font-size:10px; background:var(--navy); color:#fff; border-radius:5px; padding:1px 6px; margin:2px 4px 0 0; font-family:ui-monospace,monospace}
 .none-line{padding:10px 12px; font-size:12px; color:var(--muted); font-style:italic}

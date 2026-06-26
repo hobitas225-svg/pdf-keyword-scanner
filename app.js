@@ -217,6 +217,21 @@ function cleanQuote(q){
 const normKey = s => s.toLowerCase().replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();
 const isTocLine = q => /\.{4,}/.test(q);
 
+// Best-effort extraction of switchgear spec values from a matched clause.
+// Every field returns '' when not present — never invents a value.
+function extractSpecs(t){
+  t=t||''; const first=re=>{ const m=t.match(re); return m?(m[1]||m[0]).trim():''; };
+  let qty=first(/\b(\d{1,4})\s*(?:no\.?|nr\.?|off|sets?|units?)\b/i);
+  if(!qty) qty=first(/\b(\d{1,4})\s*[x×]\b/i);
+  const amps=first(/\b(\d{2,5})\s?A\b/);                 // amps (the 'k' in 50kA blocks a false hit)
+  const kA=first(/\b(\d{1,3})\s?kA\b/i);
+  let voltage=''; const vm=t.match(/\b(\d{1,4})\s?(kV|V)\b/i); if(vm) voltage=vm[1]+(vm[2].toLowerCase()==='kv'?'kV':'V');
+  const ip=first(/\bIP\s?\d{2}[A-Zx]?\b/i);
+  let form=''; const fm=t.match(/\bForm\s?(\d[a-z]?)\b(?:\s*Type\s*(\d[a-z]?))?/i); if(fm) form='Form '+fm[1]+(fm[2]?' Type '+fm[2]:'');
+  const phase=first(/\b(?:TP\s?&?\s?N|TPN|SP\s?&?\s?N|SPN|(?:3|three)\s?-?\s?phase|(?:1|single)\s?-?\s?phase|3ph|1ph)\b/i);
+  return { qty, amps, kA, voltage, ip, form, phase };
+}
+
 // Group raw matches into DISTINCT findings: dedupe identical text, merge
 // near-duplicates (one contained in another), and combine their source refs.
 function buildFindings(matches){
@@ -245,7 +260,7 @@ function buildFindings(matches){
   // drop contents-page (TOC) entries if real content findings exist
   const hasContent=kept.some(f=>!f.toc);
   let out=hasContent?kept.filter(f=>!f.toc):kept;
-  out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6);
+  out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6); f.specs=extractSpecs(f.text);
     f.sourceList=[...f.sources.values()].sort((a,b)=>a.file.localeCompare(b.file)||a.page-b.page); delete f.sources; delete f.key; });
   out.sort((a,b)=> (a.toc-b.toc) || b.conf-a.conf || b.sourceList.length-a.sourceList.length);
   return out;
@@ -340,6 +355,14 @@ function wireJumps(container){
     e.preventDefault(); jumpTo(+a.dataset.i,+a.dataset.j,+a.dataset.k); });
 }
 
+// chips for the extracted spec values (blank fields are omitted)
+function specChips(specs){
+  if(!specs) return '';
+  const order=[['qty','Qty'],['amps','A'],['kA','kA'],['voltage','V'],['ip','IP'],['form','Form'],['phase','Phase']];
+  const parts=order.filter(([k])=>specs[k]).map(([k,lbl])=>`<span class="spec-chip"><b>${lbl}</b> ${esc(specs[k])}</span>`);
+  return parts.length?`<div class="spec-row">${parts.join('')}</div>`:'';
+}
+
 function renderResults(){
   const box=$('#results'); box.innerHTML='';
   const dlW=$('#dlResultsWord');
@@ -368,6 +391,7 @@ function renderResults(){
                     : '<span class="m-badge syn">synonym</span>';
         const tbadge = f.tabular?'<span class="m-badge table">table/row</span>':'';
         item.innerHTML=`<div class="m-quote">${highlightQuote(f.text,f.terms)}</div>
+          ${specChips(f.specs)}
           <div class="m-top">${badge}${tbadge}<span class="m-cite">${srcLinks(i,j,f)}</span></div>
           ${f.tags.length?`<div class="m-tags">${f.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}`;
         body.appendChild(item);
