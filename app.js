@@ -262,7 +262,9 @@ function buildFindings(matches){
   let out=hasContent?kept.filter(f=>!f.toc):kept;
   out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6); f.specs=extractSpecs(f.text);
     f.sourceList=[...f.sources.values()].sort((a,b)=>a.file.localeCompare(b.file)||a.page-b.page); delete f.sources; delete f.key; });
-  out.sort((a,b)=> (a.toc-b.toc) || b.conf-a.conf || b.sourceList.length-a.sourceList.length);
+  // chronological: order findings by the earliest page they appear on (TOC entries last)
+  const pg=f=> f.sourceList.length ? Math.min(...f.sourceList.map(s=>s.page)) : Infinity;
+  out.sort((a,b)=> (a.toc-b.toc) || pg(a)-pg(b) || b.conf-a.conf);
   return out;
 }
 
@@ -292,6 +294,9 @@ function scan(){
     const fellBack = spec.tiers.length>1 && findings.length && usedTier!==spec.primary;
     return { kw, primary:spec.primary, tiers:spec.tiers, usedTier, isChain:spec.tiers.length>1, fellBack, findings, rawCount:matches.length };
   });
+  // chronological: keyword groups in the order they first appear in the document (none-found last)
+  const firstPage=g=>{ let m=Infinity; g.findings.forEach(f=>f.sourceList.forEach(s=>{ if(s.page<m)m=s.page; })); return m; };
+  state.matchesByKw.sort((a,b)=>firstPage(a)-firstPage(b));
 
   aiState='idle'; aiError='';
   renderResults();
@@ -606,7 +611,7 @@ function buildEvidenceHtml(){
     if(g.isChain) h+=chainNoteHtml(g);
     if(!g.findings.length){ h+=`<p class="rep-none">No project-specific information found in uploaded documents.</p></div>`; return; }
     h+=`<ul class="rep-bul">`;
-    g.findings.forEach((f,j)=>{ h+=`<li>${esc(f.text)} <span class="rep-cite">(${srcLinks(i,j,f)})</span>${f.tabular?' <span class="m-badge table">table/row</span>':''}</li>`; });
+    g.findings.forEach((f,j)=>{ h+=`<li>${esc(f.text)} <span class="rep-cite">(${srcLinks(i,j,f)})</span>${f.tabular?' <span class="m-badge table">table/row</span>':''}${specChips(f.specs)}</li>`; });
     h+=`</ul>`;
     const blob=g.findings.map(f=>f.text).join('  ');
     const absent=VALUE_CHECKS.filter(([,re])=>!re.test(blob)).map(([n])=>n);
@@ -675,6 +680,7 @@ function wordDoc(inner){
     .rep-label{font-weight:bold;color:#0A1F44;margin-top:8pt}
     ul.rep-bul{margin:4pt 0} ul.rep-bul li{margin-bottom:5pt}
     .rep-cite{color:#5C6B82;font-size:9pt} a.src{color:#1E90FF;text-decoration:none} .src-file{color:#5C6B82}
+    .spec-row{margin:3pt 0} .spec-chip{font-size:8.5pt;background:#eef4ff;border:1pt solid #cfe0fb;color:#1976D2;border-radius:3pt;padding:1pt 4pt;margin-right:3pt} .spec-chip b{color:#0A1F44}
     .rep-warn{background:#fff7e6;border:1pt solid #f0dcab;padding:6pt;color:#8a6418}
     .rep-none{color:#b9851f;font-style:italic} .rep-sum{background:#f3f6fb;padding:6pt} code{font-family:Consolas}
     </style></head><body>${inner}</body></html>`;
