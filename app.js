@@ -342,8 +342,8 @@ function wireJumps(container){
 
 function renderResults(){
   const box=$('#results'); box.innerHTML='';
-  const dlW=$('#dlResultsWord'), dlC=$('#dlResultsCsv');
-  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; if(dlW)dlW.disabled=true; if(dlC)dlC.disabled=true; return; }
+  const dlW=$('#dlResultsWord');
+  if(!state.matchesByKw.length){ box.innerHTML='<div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>'; $('#resCount').textContent='–'; if(dlW)dlW.disabled=true; return; }
   let total=0;
   state.matchesByKw.forEach((g,i)=>{
     total+=g.findings.length;
@@ -379,7 +379,7 @@ function renderResults(){
     box.appendChild(grp);
   });
   $('#resCount').textContent=`${total} finding${total===1?'':'s'}`;
-  if(dlW)dlW.disabled = !total; if(dlC)dlC.disabled = !total;
+  if(dlW)dlW.disabled = !total;
 }
 function highlightQuote(quote, terms){
   let out=esc(quote);
@@ -661,19 +661,6 @@ function downloadResultsWord(){
   download(reportName('doc','keyword_results'),'application/msword','﻿'+wordDoc(buildEvidenceHtml()));
 }
 function exportPrint(){ window.print(); }
-function exportCsv(){
-  const rows=[['Keyword','Search term used','Match type','Table/row','Files','Pages','Equipment tags','Finding']];
-  for(const g of state.matchesByKw){
-    if(!g.findings.length){ rows.push([g.primary,g.usedTier,'NONE','','','','','No project-specific information found in uploaded documents.']); continue; }
-    for(const f of g.findings){
-      const files=[...new Set(f.sourceList.map(s=>s.file))].join('; ');
-      const pages=[...new Set(f.sourceList.map(s=>s.page))].sort((a,b)=>a-b).join(' ');
-      rows.push([g.kw,g.usedTier,f.type,f.tabular?'yes':'',files,pages,f.tags.join(' '),f.text]);
-    }
-  }
-  const csv=rows.map(r=>r.map(c=>{ c=String(c); return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c; }).join(',')).join('\r\n');
-  download(reportName('csv'),'text/csv','﻿'+csv);
-}
 function reportName(ext, base){ return ($('#projectName').value||'pdf-scan').replace(/[^\w-]+/g,'_')+'_'+(base||'findings')+'.'+ext; }
 
 // ================= keyword groups (localStorage) =================
@@ -727,7 +714,6 @@ function init(){
   $('#btnScan').onclick=scan;
   $('#btnReport').onclick=openReport;
   $('#dlResultsWord').onclick=downloadResultsWord;
-  $('#dlResultsCsv').onclick=exportCsv;
   updateReportBtn();
 
   // viewer nav
@@ -753,7 +739,7 @@ function init(){
   document.querySelectorAll('.mode').forEach(b=>b.onclick=()=>{ document.querySelectorAll('.mode').forEach(x=>x.classList.remove('active')); b.classList.add('active'); renderReport(); });
   $('#closeReport').onclick=()=>$('#reportModal').hidden=true;
   $('#reportModal').onclick=e=>{ if(e.target.id==='reportModal') $('#reportModal').hidden=true; };
-  $('#expWord').onclick=exportWord; $('#expPdf').onclick=exportPrint; $('#expCsv').onclick=exportCsv;
+  $('#expWord').onclick=exportWord; $('#expPdf').onclick=exportPrint;
 
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape') $('#reportModal').hidden=true;
