@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF Keyword Scanner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <div>
+        <div class="title">PDF Keyword Scanner</div>
+        <div class="subtitle">Evidence linked to file &amp; page · AI summary grounded only in your documents</div>
+      </div>
+    </div>
+    <div class="project">
+      <label>Project</label>
+      <input id="projectName" type="text" value="New Project" spellcheck="false">
+    </div>
+    <div class="topbar-actions">
+      <button id="btnKey" class="btn ghost">🔑 Key</button>
+      <button id="btnScan" class="btn primary" disabled>🔍 Scan PDFs</button>
+      <button id="btnReport" class="btn" disabled>📄 Generate Report</button>
+    </div>
+  </header>
+
+  <div id="keyPanel" class="key-panel" hidden>
+    <span class="kp-label">🔑 Anthropic API key</span>
+    <input id="keyField" type="password" placeholder="sk-ant-api03-..." spellcheck="false" autocomplete="off">
+    <button id="keySave" class="btn sm primary">Save key</button>
+    <span id="keyStatus" class="key-status"></span>
+    <button id="keyHide" class="btn sm ghost">✕</button>
+  </div>
+
+  <main class="layout">
+    <!-- LEFT: Library + keyword setup -->
+    <section class="pane pane-left">
+      <div class="pane-head">
+        <h2>PDF Library</h2>
+        <span id="libCount" class="pill">0 files</span>
+      </div>
+
+      <div id="dropzone" class="dropzone">
+        <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple hidden>
+        <div class="dz-inner">
+          <div class="dz-icon">⬆</div>
+          <div><b>Drop PDFs here</b> or <button id="btnBrowse" class="link">browse</button></div>
+          <div class="dz-hint">Electrical specs, O&amp;M manuals, single-line diagrams, schedules, datasheets…</div>
+        </div>
+      </div>
+
+      <ul id="pdfList" class="pdf-list"></ul>
+
+      <div class="setup">
+        <div class="setup-head">
+          <h3>Keywords</h3>
+          <select id="groupSelect" title="Saved keyword groups"></select>
+        </div>
+        <textarea id="keywords" class="ta" spellcheck="false"
+          placeholder="One keyword per line. Use &gt; for a fallback chain, e.g.&#10;Automatic Transfer Switch &gt; ATS&#10;(searches ATS only if the full term isn't found)"></textarea>
+
+        <details class="aliases" open>
+          <summary>Aliases &amp; synonyms <span class="muted">(one per line: <code>ATS = Automatic Transfer Switch</code>)</span></summary>
+          <textarea id="aliases" class="ta ta-sm" spellcheck="false"
+            placeholder="ATS = Automatic Transfer Switch&#10;LV = Low Voltage&#10;Surge Arrestor = Surge Protection Device / SPD"></textarea>
+          <label class="chk"><input id="useDomain" type="checkbox" checked> Also match built-in electrical synonyms</label>
+        </details>
+
+        <div class="setup-actions">
+          <button id="btnSaveGroup" class="btn sm">💾 Save group</button>
+          <button id="btnDeleteGroup" class="btn sm ghost">Delete</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- CENTER: Viewer -->
+    <section class="pane pane-center">
+      <div class="pane-head viewer-head">
+        <h2 id="viewerTitle">PDF Viewer</h2>
+        <div class="viewer-nav">
+          <button id="pgPrev" class="btn sm ghost" disabled>‹</button>
+          <span class="pageind"><input id="pgInput" type="number" min="1" value="1" disabled> / <span id="pgTotal">–</span></span>
+          <button id="pgNext" class="btn sm ghost" disabled>›</button>
+          <span class="sep"></span>
+          <button id="zoomOut" class="btn sm ghost" disabled>−</button>
+          <button id="zoomIn" class="btn sm ghost" disabled>+</button>
+        </div>
+      </div>
+      <div id="viewerWrap" class="viewer-wrap">
+        <div id="viewerEmpty" class="empty">Select a PDF or a result to preview it here.<br>Matches are highlighted on the page.</div>
+        <div id="canvasHolder" class="canvas-holder" hidden>
+          <canvas id="pdfCanvas"></canvas>
+          <div id="hlLayer" class="hl-layer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Results -->
+    <section class="pane pane-right">
+      <div class="pane-head">
+        <h2>Keyword Results</h2>
+        <span id="resCount" class="pill">–</span>
+      </div>
+      <div id="results" class="results">
+        <div class="empty">Add PDFs and keywords, then press <b>Scan PDFs</b>.</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Report modal -->
+  <div id="reportModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="modes">
+          <button class="mode active" data-mode="summary">Summary</button>
+          <button class="mode" data-mode="evidence">Evidence</button>
+        </div>
+        <div class="modal-actions">
+          <button id="expWord" class="btn sm">⬇ Word</button>
+          <button id="expPdf" class="btn sm">⬇ PDF / Print</button>
+          <button id="expCsv" class="btn sm">⬇ Excel (CSV)</button>
+          <button id="closeReport" class="btn sm ghost">✕ Close</button>
+        </div>
+      </div>
+      <div id="reportBody" class="report-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

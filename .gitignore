@@ -1,0 +1,6 @@
+# local test artifacts and OS noise — never deploy these
+test*.pdf
+*.zip
+Thumbs.db
+desktop.ini
+.DS_Store
