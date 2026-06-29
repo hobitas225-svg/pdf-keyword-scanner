@@ -1,0 +1,10 @@
+# PDF Keyword Scanner — Netlify configuration
+# Pure static site, no build step (bring-your-own Anthropic key, called from the browser).
+# This does NOT affect the GitHub Pages deploy — the same repo can serve both.
+
+[build]
+  publish = "."        # serve the repo root (index.html is the entry)
+  command = ""         # nothing to build
+
+[build.environment]
+  NODE_VERSION = "20"
