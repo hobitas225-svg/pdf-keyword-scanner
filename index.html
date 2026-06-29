@@ -89,11 +89,8 @@
         </div>
       </div>
       <div id="viewerWrap" class="viewer-wrap">
-        <div id="viewerEmpty" class="empty">Select a PDF or a result to preview it here.<br>Matches are highlighted on the page.</div>
-        <div id="canvasHolder" class="canvas-holder" hidden>
-          <canvas id="pdfCanvas"></canvas>
-          <div id="hlLayer" class="hl-layer"></div>
-        </div>
+        <div id="viewerEmpty" class="empty">Select a PDF or a result to preview it here.<br>Scroll through the document; matches are highlighted, and clicking a result jumps to the exact spot.</div>
+        <div id="pageStack" class="page-stack" hidden></div>
       </div>
     </section>
 
@@ -115,10 +112,7 @@
   <div id="reportModal" class="modal" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <div class="modes">
-          <button class="mode active" data-mode="summary">Summary</button>
-          <button class="mode" data-mode="evidence">Evidence</button>
-        </div>
+        <div class="modes"><span class="report-title">Report</span></div>
         <div class="modal-actions">
           <button id="expWord" class="btn sm">⬇ Word</button>
           <button id="expPdf" class="btn sm">⬇ PDF / Print</button>

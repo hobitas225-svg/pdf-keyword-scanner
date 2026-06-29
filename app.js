@@ -28,7 +28,7 @@ const DOMAIN_CLUSTERS = [
 const state = {
   pdfs: [],          // {id,name,size,numPages,doc,pages:[{n,text,lines:[]}]}
   matchesByKw: [],   // [{kw, matches:[...]}]
-  view: { fileId:null, page:1, scale:1.2, terms:[] },
+  view: { fileId:null, scale:null, terms:[], slots:[] },
 };
 let pdfSeq = 0;
 
@@ -201,10 +201,20 @@ function searchWithRegexes(regexes, ready){
         let ctx=lines[i], k=i+1;
         while(k<lines.length && ctx.length<700){ const nx=lines[k]||''; if(/^\d+(?:\.\d+){2,}\s/.test(nx) && ctx.length>150) break; ctx+=' '+nx; k++; }
         ctx=ctx.replace(/\s+/g,' ').trim().slice(0,800);
+        // row-scoped text for STANDARDS only: the matched line + following lines that are
+        // essentially JUST standard codes (a table row's own codes), stopping at the next
+        // element/clause — so "Emergency Exit Signage" can't borrow the next row's codes.
+        let sScope=lines[i], sk=i+1;
+        while(sk<lines.length && sScope.length<400){
+          const nx=(lines[sk]||'').trim();
+          const isCodesOnly = nx.length<80 && /^[•·\-\*–—\s]*(?:BS|EN|IEC|ISO|CIBSE|NFPA|IEEE|Building Regulation)/i.test(nx) && extractStandards(nx,Infinity).length>0;
+          if(!isCodesOnly) break;
+          sScope+=' '+nx; sk++;
+        }
         const tags=[...new Set((quote.match(TAG_RE)||[]))].slice(0,6);
         const tabular=isTabular(lines[i]);
         let conf={exact:.95,alias:.8,syn:.65}[bestType]; if(tabular)conf=Math.min(.98,conf+.03);
-        out.push({ fileId:pdf.id, file:pdf.name, page:page.n, quote:quote.trim(), context:ctx,
+        out.push({ fileId:pdf.id, file:pdf.name, page:page.n, quote:quote.trim(), context:ctx, stdScope:sScope,
           terms:[...new Set(hitTerms)], type:bestType, tabular, tags, conf });
       }
     }
@@ -275,7 +285,7 @@ function buildFindings(matches){
   const byKey=new Map();
   for(const m of matches){
     const clean=cleanQuote(m.quote); const key=normKey(clean); if(!key) continue;
-    if(!byKey.has(key)) byKey.set(key,{ text:clean, key, context:m.context||clean, terms:new Set(), type:m.type, tabular:m.tabular,
+    if(!byKey.has(key)) byKey.set(key,{ text:clean, key, context:m.context||clean, stdScope:m.stdScope||clean, terms:new Set(), type:m.type, tabular:m.tabular,
       toc:isTocLine(m.quote), tags:new Set(), conf:m.conf, sources:new Map() });
     const f=byKey.get(key);
     m.terms.forEach(t=>f.terms.add(t)); m.tags.forEach(t=>f.tags.add(t));
@@ -283,6 +293,7 @@ function buildFindings(matches){
     if(m.tabular) f.tabular=true; f.conf=Math.max(f.conf,m.conf);
     if(clean.length>f.text.length) f.text=clean;
     if((m.context||'').length>(f.context||'').length) f.context=m.context;
+    if((m.stdScope||'').length>(f.stdScope||'').length) f.stdScope=m.stdScope;
     const sk=m.fileId+'|'+m.page; if(!f.sources.has(sk)) f.sources.set(sk,{fileId:m.fileId,file:m.file,page:m.page});
   }
   // merge a finding whose normalised text is contained in a longer one
@@ -293,6 +304,7 @@ function buildFindings(matches){
     if(host){ f.terms.forEach(t=>host.terms.add(t)); f.tags.forEach(t=>host.tags.add(t));
       for(const [sk,v] of f.sources) host.sources.set(sk,v);
       if((f.context||'').length>(host.context||'').length) host.context=f.context;
+      if((f.stdScope||'').length>(host.stdScope||'').length) host.stdScope=f.stdScope;
       if(RANK[f.type]>RANK[host.type]) host.type=f.type; if(f.tabular)host.tabular=true; continue; }
     kept.push(f);
   }
@@ -300,7 +312,7 @@ function buildFindings(matches){
   const hasContent=kept.some(f=>!f.toc);
   let out=hasContent?kept.filter(f=>!f.toc):kept;
   out.forEach(f=>{ f.terms=[...f.terms]; f.tags=[...f.tags].slice(0,6);
-    f.specs=extractSpecs(f.text); f.standards=extractStandards(f.context||f.text);
+    f.specs=extractSpecs(f.text); f.standards=extractStandards(f.stdScope||f.text);
     f.sourceList=[...f.sources.values()].sort((a,b)=>a.file.localeCompare(b.file)||a.page-b.page); delete f.sources; delete f.key; });
   // chronological: order findings by the earliest page they appear on (TOC entries last)
   const pg=f=> f.sourceList.length ? Math.min(...f.sourceList.map(s=>s.page)) : Infinity;
@@ -337,8 +349,6 @@ function scan(){
   // chronological: keyword groups in the order they first appear in the document (none-found last)
   const firstPage=g=>{ let m=Infinity; g.findings.forEach(f=>f.sourceList.forEach(s=>{ if(s.page<m)m=s.page; })); return m; };
   state.matchesByKw.sort((a,b)=>firstPage(a)-firstPage(b));
-  // document-wide standards register: scan EVERY page of EVERY pdf (not just matched lines)
-  state.docStandards = buildStandardsRegister();
 
   aiState='idle'; aiError='';
   renderResults();
@@ -370,7 +380,7 @@ function renderLibrary(){
 }
 function removePdf(id){
   state.pdfs=state.pdfs.filter(p=>p.id!==id);
-  if(state.view.fileId===id){ state.view.fileId=null; $('#canvasHolder').hidden=true; $('#viewerEmpty').hidden=false; $('#viewerTitle').textContent='PDF Viewer'; }
+  if(state.view.fileId===id){ if(pageObserver) pageObserver.disconnect(); state.view.fileId=null; state.view.slots=[]; $('#pageStack').innerHTML=''; $('#pageStack').hidden=true; $('#viewerEmpty').hidden=false; $('#viewerTitle').textContent='PDF Viewer'; }
   renderLibrary(); refreshScanButton();
   if(state.matchesByKw.length){ state.matchesByKw=[]; renderResults(); aiState='idle'; updateReportBtn(); }
 }
@@ -408,38 +418,6 @@ function specChips(specs){
   const order=[['qty','Qty'],['amps','A'],['kA','kA'],['voltage','V'],['ip','IP'],['form','Form'],['phase','Phase']];
   const parts=order.filter(([k])=>specs[k]).map(([k,lbl])=>`<span class="spec-chip"><b>${lbl}</b> ${esc(specs[k])}</span>`);
   return parts.length?`<div class="spec-row">${parts.join('')}</div>`:'';
-}
-// Scan every page of every ready PDF for standards (comprehensive, keyword-independent).
-function buildStandardsRegister(){
-  const map=new Map();   // std -> Map(fileName -> Set(page))
-  for(const pdf of state.pdfs){
-    if(pdf.status!=='ready') continue;
-    for(const page of pdf.pages){
-      // scan per LINE (not whole-page text) so a line-break can't merge "BS EN" with a
-      // number on the next line into a bogus standard
-      for(const line of page.lines){
-        for(const std of extractStandards(line, Infinity)){
-          if(!map.has(std)) map.set(std, new Map());
-          const fm=map.get(std);
-          if(!fm.has(pdf.name)) fm.set(pdf.name, new Set());
-          fm.get(pdf.name).add(page.n);
-        }
-      }
-    }
-  }
-  return [...map.entries()]
-    .map(([std,fm])=>({ std, refs:[...fm.entries()].map(([file,pages])=>({file, pages:[...pages].sort((a,b)=>a-b)})) }))
-    .sort((a,b)=>a.std.localeCompare(b.std, undefined, {numeric:true}));
-}
-function standardsRegisterHtml(){
-  const reg=state.docStandards||[];
-  if(!reg.length) return '';
-  let h=`<div class="rep-kw"><h2>Standards register</h2>
-    <div class="chain-note">${reg.length} standard${reg.length===1?'':'s'} referenced across the uploaded documents — every page scanned.</div>
-    <ul class="rep-bul rep-std-reg">`;
-  reg.forEach(r=>{ const refs=r.refs.map(x=>`${esc(x.file)} p.${x.pages.join(', p.')}`).join('; ');
-    h+=`<li><span class="std-chip">${esc(r.std)}</span> <span class="rep-cite">${refs}</span></li>`; });
-  return h+`</ul></div>`;
 }
 // chips for detected standards/codes (verbatim)
 function stdChips(stds){
@@ -498,58 +476,98 @@ function highlightQuote(quote, terms){
   return out;
 }
 
-// ================= viewer =================
+// ================= viewer (continuous, scrollable, lazy-rendered) =================
+let pageObserver=null;
 async function openViewer(fileId, pageNum, terms){
   const pdf=state.pdfs.find(p=>p.id===fileId); if(!pdf||!pdf.doc) return;
-  state.view={ fileId, page:Math.max(1,Math.min(pageNum,pdf.numPages)), scale:state.view.scale||1.2, terms:terms||[] };
+  terms=terms||[];
+  const sameFile = state.view.fileId===fileId && state.view.slots && state.view.slots.length;
+  state.view.fileId=fileId; state.view.terms=terms;
   $('#viewerTitle').textContent=pdf.name;
-  $('#viewerEmpty').hidden=true; $('#canvasHolder').hidden=false;
-  $('#pgTotal').textContent=pdf.numPages;
-  $('#pgInput').disabled=false; $('#pgInput').max=pdf.numPages;
+  $('#viewerEmpty').hidden=true; $('#pageStack').hidden=false;
+  $('#pgTotal').textContent=pdf.numPages; $('#pgInput').disabled=false; $('#pgInput').max=pdf.numPages;
   ['pgPrev','pgNext','zoomIn','zoomOut'].forEach(id=>$('#'+id).disabled=false);
   renderLibrary();
-  await renderPage();
+  if(sameFile){ state.view.slots.forEach(s=>{ if(s.dataset.rendered) drawHighlights(s); }); }
+  else { await buildPageStack(pdf); }
+  if(pageNum) await goToPage(Math.max(1,Math.min(pageNum,pdf.numPages)), true);
 }
-async function renderPage(){
-  const v=state.view; const pdf=state.pdfs.find(p=>p.id===v.fileId); if(!pdf) return;
-  $('#pgInput').value=v.page;
-  const page=await pdf.doc.getPage(v.page);
-  // fit-to-width on first render
-  const wrap=$('#viewerWrap');
-  if(!v._fit){ const base=page.getViewport({scale:1}); v.scale=Math.min(2.2,(wrap.clientWidth-48)/base.width); v._fit=true; }
-  const viewport=page.getViewport({scale:v.scale});
-  const canvas=$('#pdfCanvas'); const ctx=canvas.getContext('2d');
-  const dpr=window.devicePixelRatio||1;
-  canvas.width=viewport.width*dpr; canvas.height=viewport.height*dpr;
-  canvas.style.width=viewport.width+'px'; canvas.style.height=viewport.height+'px';
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  await page.render({canvasContext:ctx, viewport}).promise;
-  // highlight layer
-  const layer=$('#hlLayer'); layer.innerHTML=''; layer.style.width=viewport.width+'px'; layer.style.height=viewport.height+'px';
-  if(v.terms&&v.terms.length){
-    const res=buildHlMatchers(v.terms);
-    const tc=await page.getTextContent();
-    let first=null;
-    for(const it of tc.items){
-      if(!it.str||!res.some(r=>{r.lastIndex=0;return r.test(it.str);})) continue;
-      const tx=pdfjsLib.Util.transform(viewport.transform, it.transform);
-      const fontH=Math.hypot(tx[2],tx[3]); const w=it.width*viewport.scale;
-      const box=el('div','hl-box'); box.style.left=tx[4]+'px'; box.style.top=(tx[5]-fontH)+'px';
-      box.style.width=Math.max(w,6)+'px'; box.style.height=(fontH*1.1)+'px';
-      if(!first){ first=box; box.classList.add('focus'); }
-      layer.appendChild(box);
-    }
-    if(first) first.scrollIntoView({block:'center',behavior:'smooth'});
+async function buildPageStack(pdf){
+  const stack=$('#pageStack'); stack.innerHTML=''; const wrap=$('#viewerWrap');
+  const p1=await pdf.doc.getPage(1); const base=p1.getViewport({scale:1});
+  if(!state.view.scale) state.view.scale=Math.max(.5,Math.min(2.0,(wrap.clientWidth-40)/base.width));
+  const scale=state.view.scale, slots=[];
+  for(let n=1;n<=pdf.numPages;n++){
+    const vp=(await pdf.doc.getPage(n)).getViewport({scale});
+    const slot=el('div','page-slot'); slot.dataset.page=n;
+    slot.style.width=vp.width+'px'; slot.style.height=vp.height+'px';
+    stack.appendChild(slot); slots.push(slot);
+  }
+  state.view.slots=slots;
+  if(pageObserver) pageObserver.disconnect();
+  pageObserver=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting) renderSlot(e.target); }),
+    { root:wrap, rootMargin:'1000px 0px' });
+  slots.forEach(s=>pageObserver.observe(s));
+}
+async function renderSlot(slot){
+  const scale=state.view.scale;
+  if(slot.dataset.rendering || slot.dataset.rendered===String(scale)){ drawHighlights(slot); return; }
+  const pdf=state.pdfs.find(p=>p.id===state.view.fileId); if(!pdf) return;
+  slot.dataset.rendering='1';
+  try{
+    const pg=await pdf.doc.getPage(+slot.dataset.page);
+    const vp=pg.getViewport({scale}); slot._vp=vp;
+    let canvas=slot.querySelector('canvas'); if(!canvas){ canvas=el('canvas'); slot.appendChild(canvas); }
+    const dpr=window.devicePixelRatio||1;
+    canvas.width=vp.width*dpr; canvas.height=vp.height*dpr; canvas.style.width=vp.width+'px'; canvas.style.height=vp.height+'px';
+    const cx=canvas.getContext('2d'); cx.setTransform(dpr,0,0,dpr,0,0);
+    await pg.render({canvasContext:cx, viewport:vp}).promise;
+    slot._tc=await pg.getTextContent();
+    slot.dataset.rendered=String(scale);
+    drawHighlights(slot);
+  } finally { delete slot.dataset.rendering; }
+}
+function drawHighlights(slot){
+  let layer=slot.querySelector('.hl-layer');
+  if(!layer){ layer=el('div','hl-layer'); slot.appendChild(layer); }
+  layer.innerHTML='';
+  const terms=state.view.terms||[], vp=slot._vp, tc=slot._tc;
+  if(!terms.length || !vp || !tc) return;
+  const res=buildHlMatchers(terms);
+  for(const it of tc.items){
+    if(!it.str||!res.some(r=>{r.lastIndex=0;return r.test(it.str);})) continue;
+    const tx=pdfjsLib.Util.transform(vp.transform, it.transform);
+    const fontH=Math.hypot(tx[2],tx[3]); const w=it.width*vp.scale;
+    const box=el('div','hl-box'); box.style.left=tx[4]+'px'; box.style.top=(tx[5]-fontH)+'px';
+    box.style.width=Math.max(w,6)+'px'; box.style.height=(fontH*1.1)+'px';
+    layer.appendChild(box);
   }
 }
-// matchers for highlight: full terms + significant words of multiword terms
 function buildHlMatchers(terms){
   const set=new Set();
   for(const t of terms){ set.add(t); t.split(/\s+/).forEach(w=>{ if(w.length>=3) set.add(w); }); }
   return [...set].map(t=>{try{return termRegex(t);}catch{return /$^/;}});
 }
-function step(d){ const pdf=state.pdfs.find(p=>p.id===state.view.fileId); if(!pdf)return; const n=state.view.page+d; if(n<1||n>pdf.numPages)return; state.view.page=n; renderPage(); }
-function zoom(f){ state.view.scale=Math.max(.4,Math.min(4,state.view.scale*f)); renderPage(); }
+async function goToPage(n, focusHl){
+  const slot=state.view.slots && state.view.slots[n-1]; if(!slot) return;
+  $('#pgInput').value=n;
+  await renderSlot(slot);
+  slot.scrollIntoView({block:'start', behavior:'auto'});
+  if(focusHl){ const first=slot.querySelector('.hl-box'); if(first){ first.classList.add('focus'); first.scrollIntoView({block:'center', behavior:'smooth'}); } }
+}
+function curPage(){ return Math.max(1, parseInt($('#pgInput').value,10)||1); }
+function step(d){ const n=curPage()+d; const pdf=state.pdfs.find(p=>p.id===state.view.fileId); if(!pdf||n<1||n>pdf.numPages) return; goToPage(n,false); }
+async function zoom(f){
+  const pdf=state.pdfs.find(p=>p.id===state.view.fileId); if(!pdf) return;
+  state.view.scale=Math.max(.4,Math.min(4,(state.view.scale||1)*f));
+  const at=curPage(); await buildPageStack(pdf); await goToPage(at,false);
+}
+// track the page currently at the top of the viewport
+function trackVisiblePage(){
+  const wrap=$('#viewerWrap'), slots=state.view.slots; if(!slots) return;
+  const top=wrap.scrollTop;
+  for(let i=0;i<slots.length;i++){ if(slots[i].offsetTop+slots[i].offsetHeight > top+8){ $('#pgInput').value=i+1; break; } }
+}
 
 // ================= report =================
 const VALUE_CHECKS=[
@@ -562,7 +580,7 @@ const VALUE_CHECKS=[
   ['Switching / transfer time', /\b\d+(?:\.\d+)?\s?(?:ms|s|sec|secs|seconds)\b/i],
   ['Generator rating', /\b\d+(?:\.\d+)?\s?(?:kVA|kW|MVA|MW)\b/i],
 ];
-function currentMode(){ return $('.mode.active').dataset.mode; }
+function currentMode(){ return 'summary'; }   // report is a single AI summary now
 
 // ---- AI summary (Anthropic API, called directly from the browser) ----
 const AI_MODEL='claude-sonnet-4-6';
@@ -691,7 +709,6 @@ function aiCites(i, cites){
 // ---- Evidence mode: deduped verbatim findings (no highlighting) ----
 function buildEvidenceHtml(){
   let h=headerHtml('Evidence');
-  h+=standardsRegisterHtml();
   state.matchesByKw.forEach((g,i)=>{
     h+=`<div class="rep-kw"><h2>${esc(g.kw)}</h2>`;
     if(g.isChain) h+=chainNoteHtml(g);
@@ -714,8 +731,7 @@ function buildSummaryHtml(){
     return h+`<div class="ai-bar"><b>AI summary needs your Anthropic API key</b> (stored only in this browser).
       <div class="key-row"><input id="aiKeyInput" type="password" placeholder="sk-ant-..." spellcheck="false">
       <button id="aiKeySave" class="btn sm primary">Save key</button></div>
-      <span class="muted">Get one at console.anthropic.com → API keys. It is sent only to Anthropic, never stored anywhere but this browser. Prefer no AI? Use the <b>Evidence</b> tab — it needs no key.</span></div>`
-      + standardsRegisterHtml();   // register is deterministic — show it even without a key
+      <span class="muted">Get one at console.anthropic.com → API keys. It is sent only to Anthropic, never stored anywhere but this browser.</span></div>`;
   }
   if(aiState==='loading') h+=`<div class="ai-bar">⏳ Generating summary… <span class="muted">contacting Claude — a large/detailed spec can take 1–2 minutes; this panel fills in when it returns.</span></div>`;
   else if(aiState==='done') h+=`<div class="ai-bar"><button id="aiGenBtn" class="btn sm">↻ Regenerate</button>
@@ -725,7 +741,6 @@ function buildSummaryHtml(){
       <button id="aiKeyClear" class="btn sm ghost">change key</button>
       ${aiState==='error'?`<div class="ai-err">${esc(aiError)}</div>`:''}</div>`;
 
-  h+=standardsRegisterHtml();
   state.matchesByKw.forEach((g,i)=>{
     h+=`<div class="rep-kw"><h2>${esc(g.kw)}</h2>`;
     if(g.isChain) h+=chainNoteHtml(g);
@@ -740,7 +755,7 @@ function buildSummaryHtml(){
 }
 
 function renderReport(){
-  $('#reportBody').innerHTML = currentMode()==='evidence' ? buildEvidenceHtml() : buildSummaryHtml();
+  $('#reportBody').innerHTML = buildSummaryHtml();
   const save=$('#aiKeySave'); if(save) save.onclick=()=>{ const v=$('#aiKeyInput').value.trim(); if(!v){ toast('Paste a key first','warn'); return; } setKey(v); refreshKeyStatus(); aiState='idle'; toast('API key saved','ok'); generateAiSummary(); };
   const clr=$('#aiKeyClear'); if(clr) clr.onclick=()=>{ localStorage.removeItem(KEY_LS); aiState='idle'; refreshKeyStatus(); renderReport(); };
   const gen=$('#aiGenBtn'); if(gen) gen.onclick=generateAiSummary;
@@ -871,7 +886,8 @@ function init(){
   // viewer nav
   $('#pgPrev').onclick=()=>step(-1); $('#pgNext').onclick=()=>step(1);
   $('#zoomIn').onclick=()=>zoom(1.2); $('#zoomOut').onclick=()=>zoom(1/1.2);
-  $('#pgInput').onchange=e=>{ const n=parseInt(e.target.value,10); if(n){ state.view.page=n; renderPage(); } };
+  $('#pgInput').onchange=e=>{ const n=parseInt(e.target.value,10); if(n) goToPage(n,false); };
+  let _trk; $('#viewerWrap').addEventListener('scroll',()=>{ cancelAnimationFrame(_trk); _trk=requestAnimationFrame(trackVisiblePage); });
 
   // top-bar API key panel
   const kp=$('#keyPanel'), keyField=$('#keyField');
